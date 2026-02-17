@@ -1,4 +1,13 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // --- ANALYTICS INITIALIZATION ---
+    const analytics = new AnalyticsManager();
+    const sessionId = 'session_' + Date.now();
+    analytics.initialize('crossword_currency', sessionId);
+
+    let levelStartTime = 0;
+    let currentLevelId = '';
+    let checkAttempts = 0;
+
     // DOM Elements
     const gridElement = document.getElementById('crossword-grid');
     const acrossCluesElement = document.getElementById('across-clues');
@@ -46,6 +55,12 @@ document.addEventListener('DOMContentLoaded', () => {
         lastFocusedCell = { row: -1, col: -1 };
         currentDirection = 'across';
         timeRemaining = GAME_DURATION;
+        
+        // Start analytics tracking
+        currentLevelId = currentPuzzleData.metadata.id || 'level_1';
+        levelStartTime = Date.now();
+        checkAttempts = 0;
+        analytics.startLevel(currentLevelId);
         
         try {
             const { metadata, clues } = currentPuzzleData;
@@ -267,7 +282,45 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- PUZZLE CHECKING & SUBMISSION ---
 
     function checkCompletion() {
-        if ([...document.querySelectorAll('.cell-input')].every(input => input.value.trim() !== '')) {
+        checkAttempts++;
+        const inputs = [...document.querySelectorAll('.cell-input')];
+        const allFilled = inputs.every(input => input.value.trim() !== '');
+        const filledCount = inputs.filter(input => input.value.trim() !== '').length;
+        const totalCells = inputs.length;
+        const completionPercent = ((filledCount / totalCells) * 100).toFixed(1);
+        
+        const timeSinceStart = Date.now() - levelStartTime;
+        
+        // Log check attempt
+        console.log('[Analytics] Check attempt #' + checkAttempts, {
+            filled: filledCount,
+            total: totalCells,
+            completion: completionPercent + '%'
+        });
+        
+        // Record task
+        analytics.recordTask(
+            currentLevelId,
+            'check_attempt_' + checkAttempts,
+            `Check Attempt #${checkAttempts}`,
+            'all_filled',
+            allFilled ? 'all_filled' : 'incomplete',
+            timeSinceStart,
+            allFilled ? 10 : 0
+        );
+        
+        // Track metrics
+        analytics.addRawMetric('check_attempts', checkAttempts);
+        analytics.addRawMetric('completion_percent', completionPercent);
+        analytics.addRawMetric('filled_cells', filledCount);
+        analytics.addRawMetric('total_cells', totalCells);
+        
+        console.log('[Analytics] Metrics tracked:', analytics.getReportData().rawData);
+        
+        // Submit analytics
+        analytics.submitReport();
+        
+        if (allFilled) {
             checkButton.classList.add('hidden');
             submitButton.classList.remove('hidden');
         } else {
@@ -278,33 +331,94 @@ document.addEventListener('DOMContentLoaded', () => {
     function submitPuzzle() {
         const inputs = document.querySelectorAll('.cell-input');
         let allCorrect = true;
+        let correctCount = 0;
+        let incorrectCount = 0;
         
         inputs.forEach(input => {
             const enteredValue = input.value.toUpperCase();
             const correctValue = input.dataset.answer;
             if (enteredValue === correctValue) {
                 input.classList.add('correct');
+                correctCount++;
             } else {
                 allCorrect = false;
                 input.classList.add('incorrect-flash');
+                incorrectCount++;
             }
         });
 
+        const timeTaken = GAME_DURATION - timeRemaining;
+        const timeTakenMs = timeTaken * 1000;
+        const accuracy = inputs.length > 0 ? ((correctCount / inputs.length) * 100).toFixed(1) : 0;
+
         if (allCorrect) {
             clearInterval(timerInterval);
-            const timeTaken = GAME_DURATION - timeRemaining;
+            
+            // Calculate score
             let finalScore = 50; // Default score
+            let timeBonus = 0;
+            
             if (timeTaken <= 240) { // less than 4 mins
                 finalScore = 200;
+                timeBonus = 150;
             } else if (timeTaken <= 360) { // less than 6 mins
                 finalScore = 150;
+                timeBonus = 100;
             } else if (timeTaken <= 480) { // less than 8 mins
                 finalScore = 100;
+                timeBonus = 50;
             }
+            
+            // Apply check penalty
+            const attemptPenalty = Math.max(0, (checkAttempts - 1) * 5);
+            const attemptBonus = Math.max(0, 50 - attemptPenalty);
+            const totalXP = Math.max(50, finalScore - attemptPenalty);
+            
+            // Log completion
+            console.log('[Analytics] Level completed!', {
+                timeTaken: timeTaken + 's',
+                baseXP: finalScore,
+                timeBonus: timeBonus,
+                attemptBonus: attemptBonus,
+                totalXP: totalXP,
+                accuracy: accuracy + '%'
+            });
+            
+            // Track final metrics
+            analytics.addRawMetric('accuracy_percent', accuracy);
+            analytics.addRawMetric('correct_count', correctCount);
+            analytics.addRawMetric('incorrect_count', incorrectCount);
+            analytics.addRawMetric('total_cells', inputs.length);
+            analytics.addRawMetric('check_attempts', checkAttempts);
+            
+            // End level
+            analytics.endLevel(currentLevelId, true, timeTakenMs, totalXP);
+            
+            // Log full report
+            console.log('[Analytics] Full Report:', analytics.getReportData());
+            
+            // Submit
+            analytics.submitReport();
+            
             scoreDisplayElement.textContent = finalScore;
             inputs.forEach(input => input.readOnly = true);
             successOverlay.classList.remove('hidden');
         } else {
+            // Failed submission
+            console.log('[Analytics] Submit attempt failed:', {
+                correct: correctCount,
+                incorrect: incorrectCount,
+                accuracy: accuracy + '%'
+            });
+            
+            analytics.addRawMetric('accuracy_percent', accuracy);
+            analytics.addRawMetric('correct_count', correctCount);
+            analytics.addRawMetric('incorrect_count', incorrectCount);
+            analytics.addRawMetric('total_cells', inputs.length);
+            analytics.addRawMetric('check_attempts', checkAttempts);
+            
+            analytics.submitReport();
+            
             setTimeout(() => {
                 inputs.forEach(input => {
                     input.classList.remove('incorrect-flash');
