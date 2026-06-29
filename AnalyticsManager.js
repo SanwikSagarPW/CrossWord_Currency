@@ -147,6 +147,17 @@ class AnalyticsManager {
      */
     submitReport() {
         const payload = this.getReportData();
+        // Add canonical bestXp field with cross-session persistence
+        const _xpCur = (payload.levels || []).reduce((s, l) => s + (l.xp_earned || 0), 0);
+        const _gId = (payload.session && payload.session.game_name) || '';
+        payload.gameId = _gId;
+        payload.xpEarnedTotal = _xpCur;
+        payload.xpEarned = _xpCur;
+        payload.xpTotal = _xpCur;
+        const _bKey = 'bestXp_' + _gId;
+        let _bPrev = 0; try { _bPrev = parseInt(localStorage.getItem(_bKey) || '0', 10) || 0; } catch (_e) {}
+        payload.bestXp = Math.max(_xpCur, _bPrev);
+        if (_xpCur > _bPrev) { try { localStorage.setItem(_bKey, String(_xpCur)); } catch (_e) {} }
         const payloadString = JSON.stringify(payload);
 
         console.log('\n[Analytics] 📊 SUBMITTING REPORT 📊');
